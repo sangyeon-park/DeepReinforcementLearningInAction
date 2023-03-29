@@ -6,6 +6,13 @@ from torch.nn import functional as F
 import gym
 import torch.multiprocessing as mp #A
 
+
+from PIL import Image
+import matplotlib.pyplot as plt
+
+import os
+os.environ['KMP_DUPLICATE_LIB_OK']='True'
+
 class ActorCritic(nn.Module): #B
     def __init__(self):
         super(ActorCritic, self).__init__()
@@ -81,7 +88,7 @@ def run_episode(worker_env, worker_model):
     return values, logprobs, rewards
 
 # Listing 5.6
-def worker(t, worker_model, counter, params):
+def worker(t, worker_model, counter, params, queue):
     # print("t is:",t, flush=True)
     # sys.stdout = open(str(os.getpid()) + ".out", "w")
     # info('function cworker')
@@ -98,19 +105,25 @@ def worker(t, worker_model, counter, params):
         values, logprobs, rewards = run_episode(worker_env,worker_model) #B 
         actor_loss,critic_loss,eplen = update_params(worker_opt,values,logprobs,rewards) #C
         counter.value = counter.value + 1 #D
+        queue.append((counter.value, len(rewards)))
+        # if i%100==0 : print((queue))
 
-MasterNode = ActorCritic()
-MasterNode.share_memory()  # 프로세스들이 model의 매개변수를 복사하는게 아니라 공유하게 함 
-processes = []
-params = {
-    'epochs':1000,
-    'n_workers':7,
-}
-# 내장 공유 객체를 전역 공유 카운터로 사용
-counter = mp.Value('i',0)  # i는 정수라는 뜻 
-if __name__ == '__main__': #adding this for process safety
+        
+
+
+if __name__ == '__main__':
+    MasterNode = ActorCritic()
+    MasterNode.share_memory()  # 프로세스들이 model의 매개변수를 복사하는게 아니라 공유하게 함 
+    processes = []
+    queue = mp.Manager().list([])
+    params = {
+        'epochs':1000,
+        'n_workers':7,
+    }
+    # 내장 공유 객체를 전역 공유 카운터로 사용
+    counter = mp.Value('i',0)  # i는 정수라는 뜻 
     for i in range(params['n_workers']):
-        p = mp.Process(target=worker, args=(i,MasterNode,counter, params))
+        p = mp.Process(target=worker, args=(i,MasterNode,counter, params, queue))
         p.start()
         processes.append(p)
 
@@ -122,3 +135,54 @@ if __name__ == '__main__': #adding this for process safety
         p.terminate()
     # 전역 카운터의 값과 첫 프로세스의 종료코드 출력(문제 없으면 0)
     print(counter.value,processes[1].exitcode)
+
+
+    
+
+
+
+    # visualization 
+    env = gym.make("CartPole-v1", render_mode='rgb_array')
+    env.reset()
+    frames = []
+    screen = env.render()
+    images = [Image.fromarray(screen)]
+    for i in range(100):
+        
+        state_ = np.array(env.env.state)
+        state = torch.from_numpy(state_).float()
+        logits,value = MasterNode(state)
+        action_dist = torch.distributions.Categorical(logits=logits)
+        action = action_dist.sample()
+        # print(env.step(action.detach().numpy()))
+        state2, reward, done, _, info = env.step(action.detach().numpy())
+        if done:
+            print("Lost")
+            env.reset()
+        state_ = np.array(env.env.state)
+        state = torch.from_numpy(state_).float()
+        # env.render()
+        screen = env.render()
+        images.append(Image.fromarray(screen))
+        
+    env.close()
+    
+    image_file = 'cartpole-v1.gif'
+    # loop=0: loop forever, duration=1: play each frame for 1ms
+    images[0].save(image_file, save_all=True, append_images=images[1:], loop=0, duration=1)
+    # display_frames_as_gif(frames)
+
+    queue.sort()
+    queue = np.array(queue)
+    N = 50
+    plot_list = []
+    print(queue)
+    for i in range(len(queue)//N):
+        # print(queue[i*N:(i+1)*N,1])
+        # print("sum:",np.sum(queue[i*N:(i+1)*N][1]))
+        plot_list.append(np.sum(queue[i*N:(i+1)*N,1])/float(N))
+        # print(plot_list[-1])
+    
+    plt.plot(plot_list)
+    
+    plt.savefig('A2C_result.png')
