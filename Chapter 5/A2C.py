@@ -167,7 +167,7 @@ if __name__ == '__main__':
         
     env.close()
     
-    image_file = 'cartpole-v1.gif'
+    image_file = 'cartpole-v1_A2C.gif'
     # loop=0: loop forever, duration=1: play each frame for 1ms
     images[0].save(image_file, save_all=True, append_images=images[1:], loop=0, duration=1)
     # display_frames_as_gif(frames)
