@@ -5,7 +5,7 @@ import numpy as np
 from torch.nn import functional as F
 import gym
 import torch.multiprocessing as mp #A
-
+import time
 
 from PIL import Image
 import matplotlib.pyplot as plt
@@ -90,25 +90,52 @@ def run_episode(worker_env, worker_model, N_steps=10):
         rewards.append(reward)
     return values, logprobs, rewards, G
 
+# model 성능 평가를 위한 함수 
+def evaluate(worker_model):
+    test_env = gym.make("CartPole-v1")
+    test_env.reset()
+    maxrun = 0
+    done = False
+    test_env.reset()
+    raw_state = np.array(test_env.env.state)
+    state = torch.from_numpy(raw_state).float()
+    while(done==False):
+        #env.render('human')
+        policy, value = worker_model(state)
+        #sample action
+        action = torch.distributions.Categorical(logits=policy.view(-1)).sample().detach().numpy()
+        state_, reward, done, _, lives = test_env.step(action)
+        #print(value,reward)
+        state = torch.from_numpy(state_).float()
+        maxrun += 1
+    test_env.close()
+    return maxrun
+
 # N-step에 맞게 살짝 변경 
 def worker(t, worker_model, counter, params, queue):
-    # print("t is:",t, flush=True)
-    # sys.stdout = open(str(os.getpid()) + ".out", "w")
-    # info('function cworker')
-    # print ('hello')
+    start_time = time.time()
+    print("In process {}".format(t,))
+
     worker_env = gym.make("CartPole-v1")
     worker_env.reset()
     # 하나의 모형을 모든 프로세스가 공유 
     worker_opt = optim.Adam(lr=1e-4,params=worker_model.parameters()) #A
     worker_opt.zero_grad()
+    maxrun = 1
     for i in range(params['epochs']):
-        if i%100==0: print(i)
         worker_opt.zero_grad()
         # episode를 진행하여 데이터를 수집하고 매개변수들을 갱신한다 
         values, logprobs, rewards, G = run_episode(worker_env,worker_model) #B 
         actor_loss,critic_loss,eplen = update_params(worker_opt,values,logprobs,rewards, G) #C
         counter.value = counter.value + 1 #D
-        queue.append((counter.value, len(rewards)))
+        
+        eplen = evaluate(worker_model)
+        queue.append((counter.value, eplen))
+        if i%50==0: print("Process: {} Maxrun: {} ALoss: {} CLoss: {}".format(t,eplen, \
+                      actor_loss.detach().mean().numpy(),critic_loss.detach().mean().numpy()))
+        if time.time() - start_time > 45:
+            print("Done 45 seconds")
+            break;
         # if i%100==0 : print((queue))
 
         
@@ -120,7 +147,7 @@ if __name__ == '__main__':
     processes = []
     queue = mp.Manager().list([])
     params = {
-        'epochs':1000,
+        'epochs':1500,
         'n_workers':7,
     }
     # 내장 공유 객체를 전역 공유 카운터로 사용
